@@ -32,7 +32,7 @@ jobs:
   build-and-release:
     runs-on: windows-latest
     env:
-      PROJECT_PATH: MapleLib/MapleLib.csproj   # <- 여기를 여러분 경로로 바꾸세요
+      PROJECT_PATH: MapleLib/MapleLib.csproj
       DLL_NAME: MapleLib.dll
 
     steps:
