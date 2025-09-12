@@ -8,41 +8,87 @@ on:
     branches: [ "main" ]
   pull_request:
     branches: [ "main" ]
-  workflow_dispatch: {}
-    
-jobs:
-  build:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: '릴리즈/태그명(미입력 시 csproj <Version> 또는 v<run_number>)'
+        required: false
+      prerelease:
+        description: '프리릴리즈로 표시할까요?'
+        type: boolean
+        default: false
+      draft:
+        description: 'Draft(임시저장)로 만들까요?'
+        type: boolean
+        default: false
+      notes:
+        description: '릴리즈 노트(선택)'
+        required: false
 
+permissions:
+  contents: write   # Release 생성/업로드에 필요
+
+jobs:
+  build-and-release:
     runs-on: windows-latest
+    env:
+      PROJECT_PATH: MapleLib/MapleLib.csproj   # <- 여기를 여러분 경로로 바꾸세요
+      DLL_NAME: MapleLib.dll
 
     steps:
-    - uses: actions/checkout@v4
-    - name: Setup .NET
-      uses: actions/setup-dotnet@v4
-      with:
-        dotnet-version: 8.0.x
-    - name: Restore dependencies
-      run: dotnet restore
-    - name: Build
-      run: dotnet build --no-restore
-    - name: Test
-      run: dotnet test --no-build --verbosity normal
+      - uses: actions/checkout@v4
 
-    - name: Create GitHub Release
-      id: create_release
-      uses: softprops/action-gh-release@v1
-      with:
-        tag_name: v${{ github.run_number }}
-        name: Release ${{ github.run_number }}
-        body: |
-          Automated release from workflow dispatch.
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
 
-    - name: Upload build artifact
-      uses: softprops/action-gh-release@v1
-      with:
-        tag_name: v${{ github.run_number }}
-        files: ./publish/**
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Restore
+        run: dotnet restore "${{ env.PROJECT_PATH }}"
+
+      - name: Build (Release)
+        run: dotnet build "${{ env.PROJECT_PATH }}" -c Release -v minimal --no-restore
+
+      - name: Find MapleLib.dll
+        id: find_dll
+        shell: pwsh
+        run: |
+          $projDir = Split-Path "${{ env.PROJECT_PATH }}" -Parent
+          $dll = Get-ChildItem -Path "$projDir\bin\Release" -Recurse -Filter "${{ env.DLL_NAME }}" |
+            Sort-Object LastWriteTime -Descending |
+            Select-Object -First 1
+          if (-not $dll) { throw "❌ ${env:DLL_NAME} not found under $projDir\bin\Release" }
+          "DLL_PATH=$($dll.FullName)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          Write-Host "✅ Found: $($dll.FullName)"
+
+      - name: Resolve tag/version
+        id: ver
+        shell: pwsh
+        run: |
+          $inputTag = "${{ github.event.inputs.tag }}".Trim()
+          if ($inputTag) {
+            $tag = $inputTag
+          } else {
+            # Try <Version> from csproj
+            $csproj = "${{ env.PROJECT_PATH }}"
+            [xml]$xml = Get-Content $csproj
+            $ver = $xml.Project.PropertyGroup.Version
+            if ($ver) { $tag = "v$ver" } else { $tag = "v${{ github.run_number }}" }
+          }
+          "TAG=$tag" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          Write-Host "🔖 Tag resolved: $tag"
+
+      - name: Create/Update GitHub Release
+        id: gh_release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.ver.outputs.TAG }}
+          name: ${{ steps.ver.outputs.TAG }}
+          body: ${{ github.event.inputs.notes }}
+          draft: ${{ github.event.inputs.draft }}
+          prerelease: ${{ github.event.inputs.prerelease }}
+          generate_release_notes: ${{ github.event.inputs.notes == '' }}
+          files: ${{ steps.find_dll.outputs.DLL_PATH }}
+          fail_on_unmatched_files: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
