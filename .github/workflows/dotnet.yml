@@ -65,25 +65,35 @@ jobs:
         id: ver
         shell: pwsh
         run: |
-          $inputTag = "${{ github.event.inputs.tag }}".Trim()
-          if ($inputTag) {
-            $tag = $inputTag
-          } else {
-            # Try <Version> from csproj
-            $csproj = "${{ env.PROJECT_PATH }}"
-            [xml]$xml = Get-Content $csproj
-            $ver = $xml.Project.PropertyGroup.Version
-            if ($ver) { $tag = "v$ver" } else { $tag = "v${{ github.run_number }}" }
+          if ("${{ github.event_name }}" -eq "push") {
+            $date = Get-Date -Format "yyyyMMdd"
+            $name = "CI-Build-$date.${{ github.run_number }}"
+            $tag = "ci-build"
+          } else { # workflow_dispatch
+            $inputTag = "${{ github.event.inputs.tag }}".Trim()
+            if ($inputTag) {
+              $tag = $inputTag
+              $name = $inputTag
+            } else {
+              # Try <Version> from csproj
+              $csproj = "${{ env.PROJECT_PATH }}"
+              [xml]$xml = Get-Content $csproj
+              $ver = $xml.Project.PropertyGroup.Version
+              if ($ver) { $tag = "v$ver" } else { $tag = "v${{ github.run_number }}" }
+              $name = $tag
+            }
           }
           "TAG=$tag" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "NAME=$name" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
           Write-Host "🔖 Tag resolved: $tag"
+          Write-Host "📛 Name resolved: $name"
 
       - name: Create/Update GitHub Release
         id: gh_release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.ver.outputs.TAG }}
-          name: ${{ steps.ver.outputs.TAG }}
+          name: ${{ steps.ver.outputs.NAME }}
           body: ${{ github.event.inputs.notes }}
           draft: ${{ github.event.inputs.draft }}
           prerelease: ${{ github.event.inputs.prerelease }}
